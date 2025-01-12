@@ -1,86 +1,85 @@
-from keras.models import Sequential, Model
-from keras.layers import Input, Dense
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-import numpy as np, pandas as pd, matplotlib.pyplot as plt
-from keras.datasets import mnist
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.datasets import mnist
+from tensorflow.keras.optimizers import Adam
+import matplotlib.pyplot as plt
 
-(x_train, y_train), (x_test, y_test) = mnist.load_data()
+# Load MNIST dataset
+(x_train, _), (x_test, _) = mnist.load_data()
+x_train = x_train.astype('float32') / 255.0
+x_test = x_test.astype('float32') / 255.0
 
-x_train = x_train.astype('float32') / 255.
-x_test = x_test.astype('float32') / 255.
-x_train = x_train.reshape((len(x_train), np.prod(x_train.shape[1:])))
-x_test = x_test.reshape((len(x_test), np.prod(x_test.shape[1:])))
-print(x_train.shape)
-print(x_test.shape)
+# Flatten the images (28x28 -> 784)
+x_train = x_train.reshape(-1, 28 * 28)
+x_test = x_test.reshape(-1, 28 * 28)
 
-# Define the Autoencoder
-encoding_dim = 64
-input_img = Input(shape=(784,))
-encoded = Dense(128, activation='relu')(input_img)
-encoded = Dense(encoding_dim, activation='relu')(encoded)
-decoded = Dense(128, activation='relu')(encoded)
-decoded = Dense(784, activation='sigmoid')(decoded)
+# Define a stacked autoencoder
+def build_stacked_autoencoder(input_dim, encoding_dim):
+    # Encoder
+    input_layer = Input(shape=(input_dim,))
+    encoded = Dense(encoding_dim[0], activation='relu')(input_layer)
+    for units in encoding_dim[1:]:
+        encoded = Dense(units, activation='relu')(encoded)
 
-autoencoder = Model(input_img, decoded)
-encoder = Model(input_img, encoded)
+    # Decoder
+    decoding_dim = encoding_dim[::-1]
+    decoded = Dense(decoding_dim[0], activation='relu')(encoded)
+    for units in decoding_dim[1:-1]:
+        decoded = Dense(units, activation='relu')(decoded)
+    output_layer = Dense(input_dim, activation='sigmoid')(decoded)
 
-autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
+    # Autoencoder model
+    autoencoder = Model(input_layer, output_layer)
 
-# Train the Autoencoder
-history = autoencoder.fit(x_train, x_train,
-                epochs=30,
-                batch_size=256,
-                shuffle=True,
-                validation_data=(x_test, x_test))
+    # Encoder model for feature extraction
+    encoder = Model(input_layer, encoded)
 
-# Plot accuracy and loss
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('Autoencoder Loss')
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Test'], loc='upper right')
+    return autoencoder, encoder
+
+# Build the autoencoder
+encoding_dim = [128, 64, 32]  # Layers in the encoder
+autoencoder, encoder = build_stacked_autoencoder(input_dim=784, encoding_dim=encoding_dim)
+
+# Compile the model
+autoencoder.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+# Train the autoencoder
+history = autoencoder.fit(
+    x_train, x_train,
+    epochs=20,
+    batch_size=256,
+    shuffle=True,
+    validation_data=(x_test, x_test)
+)
+
+# Plot training and validation loss
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.legend()
+plt.title("Loss vs Epochs")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
 plt.show()
 
-decoder=Model(encoded,decoded)
+# Evaluate reconstruction performance
+reconstructed = autoencoder.predict(x_test)
 
-encoded_img = encoder.predict(x_test)
-decoded_img = decoder.predict(encoded_img)
+# Visualize original and reconstructed images
+n = 10  # Number of images to display
 plt.figure(figsize=(20, 4))
-for i in range(5):
-    # Display original
-    ax = plt.subplot(2, 5, i + 1)
-    plt.imshow(x_test[i].reshape(28, 28))
-    plt.gray()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    # Display reconstruction
-    ax = plt.subplot(2, 5, i + 1 + 5)
-    plt.imshow(decoded_img[i].reshape(28, 28))
-    plt.gray()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
+for i in range(n):
+    # Original images
+    ax = plt.subplot(2, n, i + 1)
+    plt.imshow(x_test[i].reshape(28, 28), cmap='gray')
+    plt.title("Original")
+    plt.axis('off')
+
+    # Reconstructed images
+    ax = plt.subplot(2, n, i + 1 + n)
+    plt.imshow(reconstructed[i].reshape(28, 28), cmap='gray')
+    plt.title("Reconstructed")
+    plt.axis('off')
+
 plt.show()
-
-# Encode the data using trained Autoencoder
-encoded_train = encoder.predict(x_train)
-encoded_test = encoder.predict(x_test)
-
-# Apply K-NN on encoded data
-knn = KNeighborsClassifier(n_neighbors=3)
-knn.fit(encoded_train, y_train)
-
-# Predict labels for test data
-y_pred = knn.predict(encoded_test)
-
-# Evaluate the K-NN model
-acc = accuracy_score(y_test, y_pred)
-print(f"K-NN accuracy on encoded data: {acc * 100:.2f}%")
-
-from sklearn.metrics import classification_report
-# Classification report
-report = classification_report(y_test, y_pred)
-print("Classification Report:")
-print(report)
