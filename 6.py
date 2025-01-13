@@ -1,141 +1,80 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+import tensorflow as tf
+from tensorflow.keras import layers, models, datasets, utils
+from sklearn.metrics import classification_report, precision_recall_fscore_support
 import matplotlib.pyplot as plt
+import numpy as np
 
-# Set device
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def load_mnist():
+    (x_train, y_train), (x_test, y_test) = datasets.mnist.load_data()
+    # Normalize and reshape for compatibility with LeNet-5
+    x_train, x_test = x_train / 255.0, x_test / 255.0
+    x_train = np.expand_dims(x_train, axis=-1)  # Add channel dimension
+    x_test = np.expand_dims(x_test, axis=-1)
+    y_train = utils.to_categorical(y_train, 10)  # One-hot encode labels
+    y_test = utils.to_categorical(y_test, 10)
+    return (x_train, y_train), (x_test, y_test)
 
-# Define LeNet-5 model
-class LeNet5(nn.Module):
-    def __init__(self):
-        super(LeNet5, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, kernel_size=5)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+def build_lenet5():
+    model = models.Sequential([
+        layers.Conv2D(6, kernel_size=5, activation='tanh', input_shape=(28, 28, 1), padding='same'),
+        layers.AvgPool2D(pool_size=2, strides=2),
+        layers.Conv2D(16, kernel_size=5, activation='tanh', padding='valid'),
+        layers.AvgPool2D(pool_size=2, strides=2),
+        layers.Flatten(),
+        layers.Dense(120, activation='tanh'),
+        layers.Dense(84, activation='tanh'),
+        layers.Dense(10, activation='softmax')
+    ])
+    return model
 
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2)
-        x = torch.flatten(x, 1)  # Flatten feature maps
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+def plot_metrics(history):
+    # Accuracy plot
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['accuracy'], label='Train Accuracy')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+    plt.title('Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
 
-# Hyperparameters
-batch_size = 64
-learning_rate = 0.001
-epochs = 10
+    # Loss plot
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'], label='Train Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.title('Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
 
-# Data preparation
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-train_data = datasets.MNIST(root='data', train=True, transform=transform, download=True)
-test_data = datasets.MNIST(root='data', train=False, transform=transform, download=True)
-train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+    plt.show()
 
-# Initialize model, loss function, and optimizer
-model = LeNet5().to(device)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+(x_train, y_train), (x_test, y_test) = load_mnist()
 
-# Training and validation
-train_losses = []
-val_losses = []
-val_accuracies = []
+# Build the model
+model = build_lenet5()
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
 
-for epoch in range(epochs):
-    model.train()
-    running_loss = 0.0
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
+# Train the model
+history = model.fit(x_train, y_train, validation_split=0.1, batch_size=64, epochs=10, verbose=1)
 
-        # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+# Evaluate the model
+test_loss, test_accuracy = model.evaluate(x_test, y_test, verbose=0)
+print(f"Test Accuracy: {test_accuracy:.2f}")
 
-        # Backward and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+# Generate classification report
+y_pred = model.predict(x_test)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true_classes = np.argmax(y_test, axis=1)
 
-        running_loss += loss.item()
+# Classification metrics
+precision, recall, f1, _ = precision_recall_fscore_support(y_true_classes, y_pred_classes, average='macro')
+print(f"Precision: {precision:.2f}, Recall: {recall:.2f}, F1 Score: {f1:.2f}")
 
-    train_losses.append(running_loss / len(train_loader))
+print("\nClassification Report:")
+print(classification_report(y_true_classes, y_pred_classes, target_names=[str(i) for i in range(10)]))
 
-    # Validation
-    model.eval()
-    val_loss = 0.0
-    all_labels = []
-    all_preds = []
-
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item()
-
-            _, preds = torch.max(outputs, 1)
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
-
-    val_losses.append(val_loss / len(test_loader))
-    val_accuracy = accuracy_score(all_labels, all_preds)
-    val_accuracies.append(val_accuracy)
-
-    print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {train_losses[-1]:.4f}, Validation Loss: {val_losses[-1]:.4f}, Validation Accuracy: {val_accuracy:.4f}')
-
-# Testing and evaluation metrics
-model.eval()
-all_labels = []
-all_preds = []
-
-with torch.no_grad():
-    for images, labels in test_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, preds = torch.max(outputs, 1)
-        all_labels.extend(labels.cpu().numpy())
-        all_preds.extend(preds.cpu().numpy())
-
-# Calculate metrics
-accuracy = accuracy_score(all_labels, all_preds)
-precision = precision_score(all_labels, all_preds, average='weighted')
-recall = recall_score(all_labels, all_preds, average='weighted')
-f1 = f1_score(all_labels, all_preds, average='weighted')
-print(classification_report(all_labels, all_preds))
-
-print(f'Overall Accuracy: {accuracy:.4f}')
-print(f'Overall Precision: {precision:.4f}')
-print(f'Overall Recall: {recall:.4f}')
-print(f'Overall F1 Score: {f1:.4f}')
-
-# Plot training and validation loss
-plt.figure(figsize=(12, 5))
-plt.subplot(1, 2, 1)
-plt.plot(range(1, epochs + 1), train_losses, label='Training Loss')
-plt.plot(range(1, epochs + 1), val_losses, label='Validation Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.title('Training and Validation Loss')
-
-# Plot validation accuracy
-plt.subplot(1, 2, 2)
-plt.plot(range(1, epochs + 1), val_accuracies, label='Validation Accuracy', color='green')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
-plt.title('Validation Accuracy')
-plt.tight_layout()
-plt.show()
+# Plot training/validation metrics
+plot_metrics(history)
